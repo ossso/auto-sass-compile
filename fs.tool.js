@@ -9,7 +9,7 @@ const util = {
         return new Promise((resolve) => {
             fs.stat(loadPath, (err, stats) => {
                 if (err) {
-                    console.log(err);
+                    // console.log(err);
                     resolve(null);
                 } else {
                     resolve(stats);

@@ -19,6 +19,7 @@ const watchList = {};
 const sass_reg = {
     compressed: /^\/\/\s?compileCompressed:\s?(.*)/,
     expanded: /^\/\/\s?compileExpanded:\s?(.*)/,
+    getImport: /@import "(.*[^.css])";/,
 };
 
 /**
@@ -48,6 +49,7 @@ const watchJson = async function(e, fullpath) {
         }
         // change的时候，重新加入监听列表，防止漏听
         if (watchList[filename] && watchList[filename].length) {
+            console.log(item);
             watchList[filename].forEach(item => chokidar.unwatch(item));
         }
         watchList[filename] = [];
@@ -98,13 +100,13 @@ const watchSass = async function(e, fullpath) {
     if (hasCompressed) {
         const pathInfo = path.parse(fullpath);
         const compilePath = path.resolve(pathInfo.dir, hasCompressed[1]);
-        return compileSass(data, 'compressed', compilePath);
+        return await compileSass(data, pathInfo.dir, 'compressed', compilePath);
     }
     let hasExpanded = data.match(sass_reg.expanded);
     if (hasExpanded) {
         const pathInfo = path.parse(fullpath);
         const compilePath = path.resolve(pathInfo.dir, hasExpanded[1]);
-        return compileSass(data, 'expanded', compilePath);
+        return await compileSass(data, pathInfo.dir, 'expanded', compilePath);
     }
     return false;
 };
@@ -112,13 +114,69 @@ const watchSass = async function(e, fullpath) {
 /**
  * 将读取的sass内容编译为css，postcss增加前缀
  */
-const compileSass = async function(data, outputStyle = 'compressed', savepath) {
-    let css = await compileSassToCss(data, outputStyle);
-    if (!css) return false;
-    css = await postcssTransform(css);
-    if (!css) return false;
+const compileSass = async function(data, dir, outputStyle = 'compressed', savepath) {
+    let sassData = data;
+    if (sassData.indexOf('import') > -1) {
+        sassData = await getSassImport(sassData, dir);
+    }
+    let css = await compileSassToCss(sassData, outputStyle);
+    if (css.css) {
+        css = await postcssTransform(css);
+        if (css.css) {
+            css = css.css;
+        } else {
+            css = JSON.stringify(css.err);
+        }
+    } else {
+        css = JSON.stringify(css.err);
+    }
     const status = await fsTool.saveText(savepath, css);
+    
     return status;
+};
+
+const getSassImport = async function(data, dir) {
+    let sassData = data;
+    const hasImport = data.match(new RegExp(sass_reg.getImport, 'g'));
+    if (hasImport) {
+        for (let i = 0, n = hasImport.length; i < n; i++) {
+            const item = hasImport[i];
+            // 匹配文件名
+            let importName = item.match(sass_reg.getImport);
+            importName = importName ? importName[1].replace(/\s/g, '') : false;
+            if (!importName) {
+                // 在sassData中移除import
+                sassData = sassData.replace(item, '');
+                continue;
+            } else {
+                const importSassData = await getSassFileData(importName, dir);
+                sassData = sassData.replace(item, importSassData);
+            }
+        }
+    }
+    return sassData;
+};
+
+const getSassFileData = async function(filename, dir) {
+    let fileInfo = path.join(dir, filename+'.scss');
+    fileInfo = path.parse(fileInfo);
+    const filePaths = [];
+    filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.sass`));
+    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
+    filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.scss`));
+    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
+    
+    for (let i = 0; i < 4; i++) {
+        let stat = await fsTool.getStat(filePaths[i]);
+        if (stat && stat.isFile()) {
+            let sassData = await fsTool.readFile(filePaths[i], 'utf8');
+            if (sassData.indexOf('import') > -1) {
+                sassData = await getSassImport(sassData, fileInfo.dir);
+            }
+            return sassData;
+        }
+    }
+    return '';
 };
 
 /**
@@ -128,10 +186,14 @@ const compileSassToCss = function(data, outputStyle) {
     return new Promise((resolve) => {
         sass.render({ data, outputStyle }, (err, res) => {
             if (err) {
-                resolve(false);
+                resolve({
+                    err,
+                });
             } else {
                 const css = res.css.toString('utf8');
-                resolve(css);
+                resolve({
+                    css,
+                });
             }
         });
     });
@@ -143,7 +205,7 @@ const compileSassToCss = function(data, outputStyle) {
 const postcssTransform = function(css) {
     return new Promise((resolve) => {
         postcss([ autoprefixer ]).process(css, {from: undefined}).then((result) => {
-            resolve(result.css);
+            resolve(result);
         });
     });
 };
