@@ -121,14 +121,14 @@ const compileSass = async function(data, dir, outputStyle = 'compressed', savepa
     }
     let css = await compileSassToCss(sassData, outputStyle);
     if (css.css) {
-        css = await postcssTransform(css);
+        css = await postcssTransform(css.css);
         if (css.css) {
             css = css.css;
         } else {
-            css = JSON.stringify(css.err);
+            css = `postcssTransform${JSON.stringify(css.err)}`;
         }
     } else {
-        css = JSON.stringify(css.err);
+        css = `compileSassToCss${JSON.stringify(css.err)}`;
     }
     const status = await fsTool.saveText(savepath, css);
     
@@ -204,8 +204,8 @@ const compileSassToCss = function(data, outputStyle) {
  */
 const postcssTransform = function(css) {
     return new Promise((resolve) => {
-        postcss([ autoprefixer ]).process(css, {from: undefined}).then((result) => {
-            resolve(result);
+        postcss([ autoprefixer ]).process(css, {from: undefined}).then((res) => {
+            resolve(res);
         });
     });
 };
