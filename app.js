@@ -19,7 +19,7 @@ const watchList = {};
 const sass_reg = {
     compressed: /^\/\/\s?compileCompressed:\s?(.*)/,
     expanded: /^\/\/\s?compileExpanded:\s?(.*)/,
-    getImport: /@import "(.*[^.css])";/,
+    getImport: /@import ['|"](.*)['|"];/,
 };
 
 /**
@@ -164,7 +164,7 @@ const getSassFileData = async function(filename, dir) {
     filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.sass`));
     filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
     filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.scss`));
-    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
+    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.scss`));
     
     for (let i = 0; i < 4; i++) {
         let stat = await fsTool.getStat(filePaths[i]);
@@ -186,6 +186,7 @@ const compileSassToCss = function(data, outputStyle) {
     return new Promise((resolve) => {
         sass.render({ data, outputStyle }, (err, res) => {
             if (err) {
+                fsTool.saveText(path.join(__dirname, './debug.txt'), data.toString('utf8'));
                 resolve({
                     err,
                 });
