@@ -19,7 +19,7 @@ const watchList = {};
 const sass_reg = {
     compressed: /^\/\/\s?compileCompressed:\s?(.*)/,
     expanded: /^\/\/\s?compileExpanded:\s?(.*)/,
-    getImport: /@import "(.*[^.css])";/,
+    getImport: /@import "(.*)";/,
 };
 
 /**
@@ -56,14 +56,14 @@ const watchJson = async function(e, fullpath) {
         if (Array.isArray(data)) {
             data.forEach(async (item) => {
                 const pathStat = await fsTool.getStat(item.path);
-                if (pathStat.isDirectory()) {
+                if (pathStat && pathStat.isDirectory()) {
                     watchSassPath(item.path);
                     watchList[filename].push(item.path);
                 }
             });
         } else {
             const pathStat = await fsTool.getStat(data.path);
-            if (pathStat.isDirectory()) {
+            if (pathStat && pathStat.isDirectory()) {
                 watchSassPath(data.path);
                 watchList[filename].push(item.path);
             }
@@ -164,7 +164,7 @@ const getSassFileData = async function(filename, dir) {
     filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.sass`));
     filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
     filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.scss`));
-    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
+    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.scss`));
     
     for (let i = 0; i < 4; i++) {
         let stat = await fsTool.getStat(filePaths[i]);
