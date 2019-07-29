@@ -4,10 +4,10 @@
   "description": "sass文件监听编译，加入postcss和autoprefixer",
   "main": "app.js",
   "dependencies": {
-    "autoprefixer": "^8.5.1",
-    "chokidar": "^2.0.3",
-    "node-sass": "^4.12.0",
-    "postcss": "^6.0.22"
+    "autoprefixer": "^9.4.2",
+    "chokidar": "^2.0.4",
+    "node-sass": "^4.10.0",
+    "postcss": "^7.0.6"
   },
   "devDependencies": {},
   "scripts": {

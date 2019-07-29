@@ -19,7 +19,7 @@ const watchList = {};
 const sass_reg = {
     compressed: /^\/\/\s?compileCompressed:\s?(.*)/,
     expanded: /^\/\/\s?compileExpanded:\s?(.*)/,
-    getImport: /@import "(.*)";/,
+    getImport: /@import ['|"](.*)['|"];/,
 };
 
 /**
@@ -186,6 +186,7 @@ const compileSassToCss = function(data, outputStyle) {
     return new Promise((resolve) => {
         sass.render({ data, outputStyle }, (err, res) => {
             if (err) {
+                fsTool.saveText(path.join(__dirname, './debug.txt'), data.toString('utf8'));
                 resolve({
                     err,
                 });
