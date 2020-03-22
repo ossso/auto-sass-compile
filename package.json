@@ -1,6 +1,6 @@
 {
   "name": "sass-watch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "sass文件监听编译，加入postcss和autoprefixer",
   "main": "app.js",
   "dependencies": {

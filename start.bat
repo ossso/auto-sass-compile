@@ -1,1 +1,1 @@
-forever start app.js
+forever start index.js

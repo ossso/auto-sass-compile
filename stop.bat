@@ -1,1 +1,1 @@
-forever stop app.js
+forever stop index.js
