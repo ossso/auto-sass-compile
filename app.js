@@ -1,215 +1,308 @@
-const fs = require('fs');
+/**
+ * sass 编译监听工具
+ */
 const path = require('path');
 const chokidar = require('chokidar');
-const sass = require('node-sass');
+const sass = require('sass');
 const autoprefixer = require('autoprefixer');
 const postcss = require('postcss');
-
-const fsTool = require('./fs.tool');
-
-/**
- * 规则存放路径
- */
-const watchPath = path.join(__dirname, './rule/');
-const watchList = {};
-
-/**
- * 第一行编译的sass规则
- */
-const sass_reg = {
-    compressed: /^\/\/\s?compileCompressed:\s?(.*)/,
-    expanded: /^\/\/\s?compileExpanded:\s?(.*)/,
-    getImport: /@import ['|"](.*)['|"];/,
+const fsTool = require('./fs-tool');
+const crypto = require('crypto');
+// 16位md5
+const md5 = (str) => {
+    const md5 = crypto.createHash('md5');
+    md5.update(str);
+    return md5.digest('hex').substring(8, 24);
 };
 
 /**
- * 启动时，监听配置
+ * sass监听编译
  */
-const watchConfig = function() {
-    // 调用chokidar监听
-    chokidar.watch(watchPath).on('all', (e, fullpath) => {
-        watchJson(e, fullpath);
-    });
-};
+class SassWatchCompile {
+    constructor() {
+        this.rule = [];
+        this.regexp = {
+            // 压缩编译
+            compressed: /^\/\/\s?compileCompressed:\s?(.*)/,
+            // 展开编译
+            expanded: /^\/\/\s?compileExpanded:\s?(.*)/,
+            // import
+            import: /@import ['|"](.*)['|"];/,
+        };
+        this.rulePathRelated = {};
+        this.chokidarWatcher = {};
+        this.sassImportRelated = {};
 
-/**
- * 处理配置文件
- */
-const watchJson = async function(e, fullpath) {
-    if (fullpath.lastIndexOf('.json') !== fullpath.length - 5) return null;
-    let filename = fullpath.split('.')[0];
-    filename = filename.replace(watchPath, '');
-    // 监听add
-    if (e === 'add' || e === 'change') {
-        let data = await fsTool.readFile(fullpath, 'utf8');
+        this.loadRulePath();
+    }
+
+    /**
+     * 加载规则目录
+     */
+    async loadRulePath() {
+        const rulePath = path.join(__dirname, './rule/');
+        const events = ['add', 'change', 'unlink'];
+        chokidar.watch(rulePath).on('all', (type, fullPath) => {
+            const filePathInfo = path.parse(fullPath);
+            const fileExt = filePathInfo.ext.toLowerCase();
+            if (fileExt !== '.json') {
+                return null;
+            }
+            if (!events.includes(type)) {
+                return null;
+            }
+            switch (type) {
+                case 'add':
+                case 'change':
+                    this.mountRuleConfig(fullPath);
+                    break;
+                case 'unlink':
+                    const keys = Object.keys(this.rulePathRelated);
+                    // 删除匹配的关联监听
+                    keys.forEach((i) => {
+                        if (this.rulePathRelated[i] === fullPath) {
+                            this.chokidarWatcher[i].close().then(() => {
+                                delete this.rulePathRelated[i];
+                                delete this.chokidarWatcher[i];
+                            });
+                        }
+                    });
+                    break;
+                default:
+            }
+        });
+    }
+
+    /**
+     * 挂载规则
+     */
+    async mountRuleConfig(filePath) {
+        const filePathStat = await fsTool.getStat(filePath);
+        if (!filePathStat || !filePathStat.isFile()) {
+            return this;
+        }
+        const fileContent = await fsTool.readFile(filePath, 'utf8');
+        let data = null;
         try {
-            data = JSON.parse(data);
+            data = JSON.parse(fileContent);
         } catch (err) {
-            return null;
+            return this;
         }
-        // change的时候，重新加入监听列表，防止漏听
-        if (watchList[filename] && watchList[filename].length) {
-            console.log(item);
-            watchList[filename].forEach(item => chokidar.unwatch(item));
-        }
-        watchList[filename] = [];
         if (Array.isArray(data)) {
-            data.forEach(async (item) => {
-                const pathStat = await fsTool.getStat(item.path);
-                if (pathStat.isDirectory()) {
-                    watchSassPath(item.path);
-                    watchList[filename].push(item.path);
-                }
+            data.forEach((i) => {
+                // 把目录关系关联到规则文件
+                const pathMD5Name = md5(i);
+                this.rulePathRelated[pathMD5Name] = filePath;
+                this.loadSassByFolder(i);
             });
-        } else {
-            const pathStat = await fsTool.getStat(data.path);
-            if (pathStat.isDirectory()) {
-                watchSassPath(data.path);
-                watchList[filename].push(item.path);
+        }
+        return this;
+    }
+
+    /**
+     * 监听源文件目录
+     * @param {string} loadPath 读取目录
+     */
+    async loadSassByFolder(loadPath) {
+        const watchPathStat = await fsTool.getStat(loadPath);
+        if (!watchPathStat || !watchPathStat.isDirectory()) {
+            return this;
+        }
+        const pathMD5Name = md5(loadPath);
+        if (this.chokidarWatcher[pathMD5Name]) {
+            return this;
+        }
+        // 创建目录的watcher
+        const watcher = chokidar.watch(loadPath);
+        this.chokidarWatcher[pathMD5Name] = watcher;
+        watcher.on('all', (type, fullPath) => {
+            const pathInfo = path.parse(fullPath);
+            const fileExt = pathInfo.ext.toLowerCase();
+            if (fileExt !== '.scss' && fileExt !== '.sass') {
+                return null;
+            }
+            const fileMD5Name = md5(fullPath);
+            switch (type) {
+                // /**
+                //  * 添加（首次监听也是add）
+                //  * 判断是否为需要编译
+                //  */
+                // case 'add':
+                //     this.preLoadSassInfo(fullPath, pathInfo);
+                //     break;
+                /**
+                 * 文件变化
+                 * 判断在关联中是否存在，存在编译关联文件
+                 * 不存在判断是否为需要编译
+                 */
+                case 'change':
+                    if (this.sassImportRelated[fileMD5Name]) {
+                        this.preLoadSassInfo(this.sassImportRelated[fileMD5Name]);
+                    } else {
+                        this.preLoadSassInfo(fullPath, pathInfo);
+                    }
+                    break;
+                /**
+                 * 文件删除
+                 * 删除这个文件的关联
+                 */
+                case 'unlink':
+                    /**
+                     * import文件被删除
+                     */
+                    if (this.sassImportRelated[fileMD5Name]) {
+                        /**
+                         * 理论上应该重新编译一次sass
+                         * 考虑到编辑的同步性，编译文件那边的import可能还没有被去掉，所以不执行重新编译
+                         */
+                        // this.preLoadSassInfo(this.sassImportRelated[fileMD5Name]);
+                        // 删除这个import文件的关联记录
+                        delete this.sassImportRelated[fileMD5Name];
+                    } else {
+                        /**
+                         * 如果这个文件被删除
+                         * 又不在import关联中
+                         * 多半是编译sass文件
+                         * 遍历import关联，删除与这个文件相关的import
+                         */
+                        const keys = Object.keys(this.sassImportRelated);
+                        keys.forEach((i) => {
+                            if (this.sassImportRelated[i] === fullPath) {
+                                delete this.sassImportRelated[i];
+                            }
+                        });
+                    }
+                    break;
+                default:
+            }
+        });
+        return this;
+    }
+
+    /**
+     * 预读取
+     */
+    async preLoadSassInfo(filePath, pathInfo = null) {
+        const filePathInfo = pathInfo || path.parse(filePath);
+        const fileContent = await fsTool.readFile(filePath, 'utf8');
+        let compileType = null;
+        let compilePath = null;
+        const hasCompressed = fileContent.match(this.regexp.compressed);
+        const hasExpanded = hasCompressed ? null : fileContent.match(this.regexp.expanded);
+        if (hasCompressed) {
+            compilePath = path.resolve(filePathInfo.dir, hasCompressed[1]);
+            compileType = 'compressed';
+        } else if (hasExpanded) {
+            compilePath = path.resolve(filePathInfo.dir, hasCompressed[1]);
+            compileType = 'expanded';
+        }
+        if (compileType && compilePath) {
+            this.compileSassFile(fileContent, filePathInfo, compilePath, compileType);
+        }
+    }
+
+    /**
+     * 编译sass文件
+     * @param {string} content 文件正文内容
+     * @param {object} pathInfo Path Info
+     * @param {string} compilePath 编译文件保存路径
+     * @param {string} compileType 编译类型
+     */
+    async compileSassFile(content, pathInfo, compilePath, compileType) {
+        let sassContent = content;
+        sassContent = await this.replaceSassImport(sassContent, pathInfo.dir, path.format(pathInfo));
+        const {
+            css,
+            err,
+        } = await this.compileSass({
+            data: sassContent,
+            outputStyle: compileType,
+        });
+        if (err) {
+            await fsTool.saveFile(compilePath, `
+            CompileSass Fail
+            ${JSON.stringify(err)}
+            `);
+            return this;
+        }
+        const {
+            postcss,
+            posterr,
+        } = await this.postcssTransform(css);
+        if (posterr) {
+            await fsTool.saveFile(compilePath, `
+            PostcssTransform
+            ${JSON.stringify(posterr)}
+            `);
+            return this;
+        }
+        await fsTool.saveFile(compilePath, postcss);
+    }
+
+    /**
+     * 替换sass中import的sass文件
+     * 同时关联文件的刷新编译
+     * @param {string} content 正文内容
+     * @param {string} dir 文件所在文件夹路径
+     */
+    async replaceSassImport(content, dir, relatedFilePath) {
+        let sassContent = content;
+        const hasImport = content.match(new RegExp(this.regexp.import, 'g'));
+        if (hasImport) {
+            for (let i = 0, n = hasImport.length; i < n; i++) {
+                const item = hasImport[i];
+                let importSassContent = '';
+                // 匹配文件名
+                let importName = item.match(this.regexp.import);
+                importName = importName ? importName[1].replace(/\s/g, '') : false;
+                if (importName) {
+                    const importSassFilePath = path.resolve(dir, importName);
+                    const importSassFileContent = await fsTool.readFile(importSassFilePath, 'utf8');
+                    const importSassDir = path.parse(importSassFilePath).dir;
+                    importSassContent = await this.replaceSassImport(importSassFileContent, importSassDir, relatedFilePath);
+                    const fileMD5Name = md5(importSassFilePath);
+                    this.sassImportRelated[fileMD5Name] = relatedFilePath;
+                }
+                sassContent = sassContent.replace(item, importSassContent);
             }
         }
-    } else if (e === 'unlink' && watchList[filename]) {
-        if (watchList[filename].length) {
-            watchList[filename].forEach(item => chokidar.unwatch(item));
-        }
-        delete watchList[filename];
+        return sassContent;
     }
-};
 
-/**
- * 监听sass文件路径
- */
-const watchSassPath = function(path) {
-    // 调用chokidar监听
-    chokidar.watch(path).on('all', (e, fullpath) => {
-        watchSass(e, fullpath);
-    });
-};
-
-/**
- * sass文件监听
- * sass的编译只监听change
- */
-const watchSass = async function(e, fullpath) {
-    const isSass = fullpath.lastIndexOf('.sass') !== fullpath.length - 5;
-    const isScss = fullpath.lastIndexOf('.scss') !== fullpath.length - 5;
-    if (!isSass && !isScss) return null;
-    if (e !== 'change') return null;
-    let data = await fsTool.readFile(fullpath, 'utf8');
-    let hasCompressed = data.match(sass_reg.compressed);
-    if (hasCompressed) {
-        const pathInfo = path.parse(fullpath);
-        const compilePath = path.resolve(pathInfo.dir, hasCompressed[1]);
-        return await compileSass(data, pathInfo.dir, 'compressed', compilePath);
-    }
-    let hasExpanded = data.match(sass_reg.expanded);
-    if (hasExpanded) {
-        const pathInfo = path.parse(fullpath);
-        const compilePath = path.resolve(pathInfo.dir, hasExpanded[1]);
-        return await compileSass(data, pathInfo.dir, 'expanded', compilePath);
-    }
-    return false;
-};
-
-/**
- * 将读取的sass内容编译为css，postcss增加前缀
- */
-const compileSass = async function(data, dir, outputStyle = 'compressed', savepath) {
-    let sassData = data;
-    if (sassData.indexOf('import') > -1) {
-        sassData = await getSassImport(sassData, dir);
-    }
-    let css = await compileSassToCss(sassData, outputStyle);
-    if (css.css) {
-        css = await postcssTransform(css.css);
-        if (css.css) {
-            css = css.css;
-        } else {
-            css = `postcssTransform${JSON.stringify(css.err)}`;
-        }
-    } else {
-        css = `compileSassToCss${JSON.stringify(css.err)}`;
-    }
-    const status = await fsTool.saveText(savepath, css);
-    
-    return status;
-};
-
-const getSassImport = async function(data, dir) {
-    let sassData = data;
-    const hasImport = data.match(new RegExp(sass_reg.getImport, 'g'));
-    if (hasImport) {
-        for (let i = 0, n = hasImport.length; i < n; i++) {
-            const item = hasImport[i];
-            // 匹配文件名
-            let importName = item.match(sass_reg.getImport);
-            importName = importName ? importName[1].replace(/\s/g, '') : false;
-            if (!importName) {
-                // 在sassData中移除import
-                sassData = sassData.replace(item, '');
-                continue;
-            } else {
-                const importSassData = await getSassFileData(importName, dir);
-                sassData = sassData.replace(item, importSassData);
-            }
-        }
-    }
-    return sassData;
-};
-
-const getSassFileData = async function(filename, dir) {
-    let fileInfo = path.join(dir, filename+'.scss');
-    fileInfo = path.parse(fileInfo);
-    const filePaths = [];
-    filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.sass`));
-    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.sass`));
-    filePaths.push(path.join(fileInfo.dir, `./${fileInfo.name}.scss`));
-    filePaths.push(path.join(fileInfo.dir, `./_${fileInfo.name}.scss`));
-    
-    for (let i = 0; i < 4; i++) {
-        let stat = await fsTool.getStat(filePaths[i]);
-        if (stat && stat.isFile()) {
-            let sassData = await fsTool.readFile(filePaths[i], 'utf8');
-            if (sassData.indexOf('import') > -1) {
-                sassData = await getSassImport(sassData, fileInfo.dir);
-            }
-            return sassData;
-        }
-    }
-    return '';
-};
-
-/**
- * sass转css
- */
-const compileSassToCss = function(data, outputStyle) {
-    return new Promise((resolve) => {
-        sass.render({ data, outputStyle }, (err, res) => {
-            if (err) {
-                fsTool.saveText(path.join(__dirname, './debug.txt'), data.toString('utf8'));
+    /**
+     * 编译sass文件
+     * @param {object} options
+     */
+    compileSass(options) {
+        return new Promise((resolve) => {
+            sass.render(options, (err, res) => {
                 resolve({
                     err,
+                    css: res.css.toString('utf8'),
                 });
-            } else {
-                const css = res.css.toString('utf8');
+            });
+        });
+    }
+
+    /**
+     * PostCSS处理
+     * @param {string} css css正文
+     */
+    postcssTransform(css) {
+        return new Promise((resolve) => {
+            postcss([ autoprefixer ]).process(css, {
+                from: undefined,
+            }).then((res) => {
                 resolve({
-                    css,
+                    postcss: res,
                 });
-            }
+            }).catch((err) => {
+                resovle({
+                    posterr: err,
+                });
+            });
         });
-    });
-};
+    }
+}
 
-/**
- * postcss处理
- */
-const postcssTransform = function(css) {
-    return new Promise((resolve) => {
-        postcss([ autoprefixer ]).process(css, {from: undefined}).then((res) => {
-            resolve(res);
-        });
-    });
-};
-
-// 开始监听
-watchConfig();
+new SassWatchCompile();
