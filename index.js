@@ -31,6 +31,7 @@ class SassWatchCompile {
         };
         this.rulePathRelated = {};
         this.chokidarWatcher = {};
+        this.sassCompileWatch = {};
         this.sassImportRelated = {};
 
         this.loadRulePath();
@@ -123,13 +124,13 @@ class SassWatchCompile {
             }
             const fileMD5Name = md5(fullPath);
             switch (type) {
-                // /**
-                //  * 添加（首次监听也是add）
-                //  * 判断是否为需要编译
-                //  */
-                // case 'add':
-                //     this.preLoadSassInfo(fullPath, pathInfo);
-                //     break;
+                /**
+                 * 添加（首次监听也是add）
+                 * 判断是否为需要编译
+                 */
+                case 'add':
+                    this.preLoadSassInfo(fullPath, pathInfo);
+                    break;
                 /**
                  * 文件变化
                  * 判断在关联中是否存在，存在编译关联文件
@@ -210,7 +211,16 @@ class SassWatchCompile {
      */
     async compileSassFile(content, pathInfo, compilePath, compileType) {
         let sassContent = content;
-        sassContent = await this.replaceSassImport(sassContent, pathInfo.dir, path.format(pathInfo));
+        const sassFilename = path.format(pathInfo);
+        sassContent = await this.replaceSassImport(sassContent, pathInfo.dir, sassFilename);
+        const sassFileMD5Name = md5(sassFilename);
+        if (!this.sassCompileWatch[sassFileMD5Name]) {
+            const compilePathStat = await fsTool.getStat(compilePath);
+            if (compilePathStat) {
+                this.sassCompileWatch[sassFileMD5Name] = Math.floor(compilePathStat.atimeMs);
+                return this;
+            }
+        }
         const {
             css,
             err,
@@ -237,6 +247,8 @@ class SassWatchCompile {
             return this;
         }
         await fsTool.saveFile(compilePath, postcss);
+        this.sassCompileWatch[sassFileMD5Name] = Date.now();
+        return this;
     }
 
     /**
